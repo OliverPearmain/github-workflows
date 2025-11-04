@@ -9,13 +9,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Fetch Slack mapping JSON
-        id: fetch_mapping
+      - name: Notify Slack for PR Review Replies
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          slack-token: ${{ secrets.SLACK_MOBILE_BOT_OAUTH_TOKEN }}
           script: |
-            // Fetch the file content via GitHub API
+            const { WebClient } = require('@slack/web-api');
+            const slackToken = core.getInput('slack-token');
+            const slack = new WebClient(slackToken);
+
+            const comment = context.payload.comment;
+            const currentAuthor = comment.user.login;
+            const prNumber = context.payload.pull_request.number;
+
+            // Fetch Slack mapping JSON from repo
             const file = await github.rest.repos.getContent({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -23,52 +31,27 @@ jobs:
               ref: context.sha
             });
 
-            console.log("Fetched file content (base64):", file.data.content);
-
-            // Decode base64 content and ensure valid JSON
-            let slackMapping = Buffer.from(file.data.content, 'base64').toString().trim();
-            console.log("Decoded slackMapping string:", slackMapping);
-            
-            if (!slackMapping) slackMapping = '{}';
-            let parsedMapping;
+            const slackMappingString = Buffer.from(file.data.content, 'base64').toString().trim();
+            let slackMapping;
             try {
-              parsedMapping = JSON.parse(slackMapping);
-              console.log("Parsed slackMapping keys:", Object.keys(parsedMapping));
+              slackMapping = JSON.parse(slackMappingString || '{}');
             } catch (err) {
-              console.error("Failed to parse slackMapping JSON:", err);
-              parsedMapping = {};
+              console.error("Failed to parse slack-notifications.json:", err);
+              slackMapping = {};
             }
-
-            return { slackMapping: JSON.stringify(parsedMapping) };
-
-      - name: Determine thread contributors
-        id: thread_check
-        env:
-          SLACK_MAPPING_RAW: ${{ steps.fetch_mapping.outputs.slackMapping }}
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const comment = context.payload.comment;
-            const currentAuthor = comment.user.login;
-
-            // Parse Slack mapping from environment variable
-            const slackMapping = JSON.parse(process.env.SLACK_MAPPING_RAW || '{}');
-            console.log("slackMapping type:", typeof slackMapping);
-            console.log("slackMapping keys:", Object.keys(slackMapping));
+            console.log("Slack mapping keys:", Object.keys(slackMapping));
 
             // Fetch all review comments on this PR
-            const prNumber = context.payload.pull_request.number;
             const allComments = await github.rest.pulls.listReviewComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: prNumber,
+              pull_number: prNumber
             });
 
             // Identify the root of the thread
-            let rootId = comment.in_reply_to_id || comment.id;
+            const rootId = comment.in_reply_to_id || comment.id;
 
-            // Filter all comments in this thread
+            // Collect all comments that belong to this thread
             function isInThread(c, rootId) {
               let current = c;
               while (current.in_reply_to_id) {
@@ -89,37 +72,11 @@ jobs:
             threadContributorsSet.delete(currentAuthor);
             console.log("threadContributors (after removing current author):", [...threadContributorsSet]);
 
-            // Filter to only those in Slack mapping
+            // Filter contributors to only those in Slack mapping
             const notifyUsers = [...threadContributorsSet].filter(u => slackMapping[u]);
             console.log("notifyUsers output:", notifyUsers);
-            console.log("commentUrl output:", comment.html_url);
 
-            core.setOutput("notifyUsers", JSON.stringify(notifyUsers));
-            core.setOutput("commentUrl", comment.html_url);
-
-      - name: Send Slack notifications per user
-        if: steps.thread_check.outputs.notifyUsers != '[]'
-        uses: actions/github-script@v7
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_MOBILE_BOT_OAUTH_TOKEN }}
-          SLACK_MAPPING_RAW: ${{ steps.fetch_mapping.outputs.slackMapping }}
-          NOTIFY_USERS_RAW: ${{ steps.thread_check.outputs.notifyUsers }}
-          COMMENT_URL: ${{ steps.thread_check.outputs.commentUrl }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const { WebClient } = require('@slack/web-api');
-            const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
-
-            // Parse environment variables safely
-            const slackMapping = JSON.parse(process.env.SLACK_MAPPING_RAW || '{}');
-            const notifyUsers = JSON.parse(process.env.NOTIFY_USERS_RAW || '[]');
-            const commentUrl = process.env.COMMENT_URL;
-
-            console.log("Slack mapping:", slackMapping);
-            console.log("Notify users:", notifyUsers);
-            console.log("Comment URL:", commentUrl);
-
+            // Send Slack messages
             for (const user of notifyUsers) {
               const slackId = slackMapping[user]?.channel;
               if (!slackId) {
@@ -127,7 +84,7 @@ jobs:
                 continue;
               }
 
-              const text = `<@${slackId}> Someone replied in a PR review thread you contributed to: <${commentUrl}|View Comment>`;
+              const text = `<@${slackId}> Someone replied in a PR review thread you contributed to: <${comment.html_url}|View Comment>`;
               await slack.chat.postMessage({ channel: slackId, text });
               console.log(`✅ Sent message to ${user} (${slackId})`);
             }
