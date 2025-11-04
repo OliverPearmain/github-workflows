@@ -1,0 +1,120 @@
+name: Notify Slack on Replies in Threads for Multiple Contributors
+
+on:
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  pr_reply_slack_notifications:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: DM Slack Users for PR Review Replies
+        uses: actions/github-script@v7
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_MOBILE_BOT_OAUTH_TOKEN }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const comment = context.payload.comment;
+            const currentAuthor = comment.user.login;
+            const prNumber = context.payload.pull_request.number;
+
+            // Fetch Slack mapping JSON from repo
+            const file = await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: 'slack-notifications.json',
+              ref: context.sha
+            });
+
+            const slackMappingString = Buffer.from(file.data.content, 'base64').toString().trim();
+            let slackMapping;
+            try {
+              slackMapping = JSON.parse(slackMappingString || '{}');
+            } catch (err) {
+              console.error("Failed to parse slack-notifications.json:", err);
+              slackMapping = {};
+            }
+            console.log("Slack mapping keys:", Object.keys(slackMapping));
+
+            // Fetch all review comments on this PR
+            const allComments = await github.rest.pulls.listReviewComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            // Identify the root of the thread
+            const rootId = comment.in_reply_to_id || comment.id;
+
+            // Collect all comments that belong to this thread
+            function isInThread(c, rootId) {
+              let current = c;
+              while (current.in_reply_to_id) {
+                if (current.in_reply_to_id === rootId) return true;
+                current = allComments.data.find(x => x.id === current.in_reply_to_id);
+                if (!current) break;
+              }
+              return c.id === rootId;
+            }
+
+            const threadComments = allComments.data.filter(c => isInThread(c, rootId));
+            console.log(`Thread contains ${threadComments.length} comments`);
+
+            // Collect unique contributors
+            const threadContributorsSet = new Set(threadComments.map(c => c.user.login));
+            console.log("threadContributors (before removing current author):", [...threadContributorsSet]);
+
+            threadContributorsSet.delete(currentAuthor);
+            console.log("threadContributors (after removing current author):", [...threadContributorsSet]);
+
+            // Filter contributors to only those in Slack mapping
+            const notifyUsers = [...threadContributorsSet].filter(u => slackMapping[u]);
+            console.log("notifyUsers output:", notifyUsers);
+
+            // Send DMs to each user
+            for (const user of notifyUsers) {
+              const slackMemberId = slackMapping[user]?.slackMemberID;
+              if (!slackMemberId) {
+                console.log(`No Slack user ID defined for ${user}, skipping.`);
+                continue;
+              }
+
+              const text = `Someone replied in a PR review thread you contributed to: <${comment.html_url}|View Comment>`;
+
+              // Open DM channel
+              const imResponse = await fetch('https://slack.com/api/conversations.open', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`
+                },
+                body: JSON.stringify({ users: slackMemberId })
+              });
+              const imData = await imResponse.json();
+
+              if (!imData.ok) {
+                console.error(`Failed to open DM with ${slackMemberId}:`, imData);
+                continue;
+              }
+
+              const dmChannelId = imData.channel.id;
+
+              // Send the message
+              const postResponse = await fetch('https://slack.com/api/chat.postMessage', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`
+                },
+                body: JSON.stringify({ channel: dmChannelId, text })
+              });
+
+              const postResult = await postResponse.json();
+              if (!postResult.ok) {
+                console.error(`Failed to send DM to ${user} (${slackMemberId}):`, postResult);
+              } else {
+                console.log(`✅ Sent DM to ${user} (${slackMemberId})`);
+              }
+            }
