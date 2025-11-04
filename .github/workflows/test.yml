@@ -40,54 +40,45 @@ jobs:
             // Parse Slack mapping
             const slackMapping = JSON.parse('${{ steps.fetch_mapping.outputs.slackMapping }}' || '{}');
 
-            // Skip if the comment is not a reply
-            if (!comment.in_reply_to_id) {
-              console.log("Comment is not a reply, skipping.");
-              core.setOutput("notifyUsers", "[]");
-              core.setOutput("commentUrl", comment.html_url);
-              console.log("notifyUsers output:", "[]");
-              console.log("commentUrl output:", comment.html_url);
-              return;
-            }
+            // Fetch all review comments on this PR
+            const prNumber = context.payload.pull_request.number;
+            const allComments = await github.rest.pulls.listReviewComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
 
-            // Traverse the thread to collect all contributors
-            async function getThreadContributors(commentId) {
-              const contributors = new Set();
-              let currentId = commentId;
-              while (currentId) {
-                const c = await github.rest.pulls.getReviewComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: currentId
-                });
+            // Identify the root of the thread
+            let rootId = comment.in_reply_to_id || comment.id;
 
-                console.log(`Processing comment ID: ${c.data.id}, author: ${c.data.user.login}`);
-                contributors.add(c.data.user.login);
-                currentId = c.data.in_reply_to_id || null;
-
-                if (currentId) {
-                  console.log(`Next comment in thread (in_reply_to_id): ${currentId}`);
-                } else {
-                  console.log("Reached top of thread.");
-                }
+            // Filter all comments in this thread (comments that ultimately descend from the root)
+            function isInThread(c, rootId) {
+              let current = c;
+              while (current.in_reply_to_id) {
+                if (current.in_reply_to_id === rootId) return true;
+                current = allComments.data.find(x => x.id === current.in_reply_to_id);
+                if (!current) break;
               }
-              return contributors;
+              return c.id === rootId; // include the root itself
             }
 
-            const threadContributors = await getThreadContributors(comment.in_reply_to_id);
-            console.log("threadContributors (all contributors in thread):", [...threadContributors]);
+            const threadComments = allComments.data.filter(c => isInThread(c, rootId));
+            console.log(`Thread contains ${threadComments.length} comments`);
 
-            threadContributors.delete(currentAuthor);
-            console.log("threadContributors after removing current author:", [...threadContributors]);
+            // Collect unique contributors
+            const threadContributorsSet = new Set(threadComments.map(c => c.user.login));
+            console.log("threadContributors (before removing current author):", [...threadContributorsSet]);
 
-            // Filter contributors to only those in the slackMapping
-            const notifyUsers = [...threadContributors].filter(user => slackMapping[user]);
+            threadContributorsSet.delete(currentAuthor);
+            console.log("threadContributors (after removing current author):", [...threadContributorsSet]);
+
+            // Filter to only those in the Slack mapping
+            const notifyUsers = [...threadContributorsSet].filter(u => slackMapping[u]);
+            console.log("notifyUsers output:", notifyUsers);
+            console.log("commentUrl output:", comment.html_url);
+
             core.setOutput("notifyUsers", JSON.stringify(notifyUsers));
             core.setOutput("commentUrl", comment.html_url);
-
-            // Debug prints
-            console.log("notifyUsers output:", JSON.stringify(notifyUsers));
-            console.log("commentUrl output:", comment.html_url);
 
       - name: Send Slack notifications per user
         if: steps.thread_check.outputs.notifyUsers != '[]'
