@@ -33,7 +33,6 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const core = require('@actions/core');
             const comment = context.payload.comment;
             const currentAuthor = comment.user.login;
             const slackMapping = JSON.parse('${{ steps.fetch_mapping.outputs.slackMapping }}');
