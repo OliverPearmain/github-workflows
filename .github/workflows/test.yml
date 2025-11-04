@@ -45,6 +45,8 @@ jobs:
               console.log("Comment is not a reply, skipping.");
               core.setOutput("notifyUsers", "[]");
               core.setOutput("commentUrl", comment.html_url);
+              console.log("notifyUsers output:", "[]");
+              console.log("commentUrl output:", comment.html_url);
               return;
             }
 
@@ -72,6 +74,10 @@ jobs:
             core.setOutput("notifyUsers", JSON.stringify(notifyUsers));
             core.setOutput("commentUrl", comment.html_url);
 
+            // Debug prints
+            console.log("notifyUsers output:", JSON.stringify(notifyUsers));
+            console.log("commentUrl output:", comment.html_url);
+
       - name: Send Slack notifications per user
         if: steps.thread_check.outputs.notifyUsers != '[]'
         uses: actions/github-script@v7
@@ -89,6 +95,10 @@ jobs:
             const slackMapping = JSON.parse(process.env.SLACK_MAPPING || '{}');
             const notifyUsers = JSON.parse(process.env.NOTIFY_USERS || '[]');
             const commentUrl = process.env.COMMENT_URL;
+
+            console.log("Slack mapping:", slackMapping);
+            console.log("Notify users:", notifyUsers);
+            console.log("Comment URL:", commentUrl);
 
             for (const user of notifyUsers) {
               const slackId = slackMapping[user]?.channel;
