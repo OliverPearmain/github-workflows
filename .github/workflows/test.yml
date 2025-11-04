@@ -30,6 +30,8 @@ jobs:
 
       - name: Determine thread contributors
         id: thread_check
+        env:
+          SLACK_MAPPING: ${{ steps.fetch_mapping.outputs.slackMapping }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -37,8 +39,10 @@ jobs:
             const comment = context.payload.comment;
             const currentAuthor = comment.user.login;
 
-            // Parse Slack mapping
-            const slackMapping = JSON.parse('${{ steps.fetch_mapping.outputs.slackMapping }}' || '{}');
+            // Parse Slack mapping from environment variable
+            const slackMapping = JSON.parse(process.env.SLACK_MAPPING || '{}');
+            console.log("slackMapping type:", typeof slackMapping);
+            console.log("slackMapping keys:", Object.keys(slackMapping));
 
             // Fetch all review comments on this PR
             const prNumber = context.payload.pull_request.number;
