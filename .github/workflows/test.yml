@@ -33,12 +33,13 @@ jobs:
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          slack-mapping: ${{ steps.fetch_mapping.outputs.slackMapping }}
           script: |
             const comment = context.payload.comment;
             const currentAuthor = comment.user.login;
 
-            // Parse slack mapping safely
-            const slackMapping = JSON.parse(steps.fetch_mapping.outputs.slackMapping || '{}');
+            // Parse the Slack mapping passed from the previous step
+            const slackMapping = JSON.parse(core.getInput('slack-mapping') || '{}');
 
             // Skip if the comment is not a reply
             if (!comment.in_reply_to_id) {
@@ -79,13 +80,16 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_MOBILE_BOT_OAUTH_TOKEN }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          slack-mapping: ${{ steps.fetch_mapping.outputs.slackMapping }}
+          notify-users: ${{ steps.thread_check.outputs.notifyUsers }}
+          comment-url: ${{ steps.thread_check.outputs.commentUrl }}
           script: |
             const { WebClient } = require('@slack/web-api');
-            const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+            const slack = new WebClient(process.env.SLACK_MOBILE_BOT_OAUTH_TOKEN);
 
-            const slackMapping = JSON.parse(steps.fetch_mapping.outputs.slackMapping || '{}');
-            const commentUrl = steps.thread_check.outputs.commentUrl;
-            const notifyUsers = JSON.parse(steps.thread_check.outputs.notifyUsers || '[]');
+            const slackMapping = JSON.parse(core.getInput('slack-mapping') || '{}');
+            const notifyUsers = JSON.parse(core.getInput('notify-users') || '[]');
+            const commentUrl = core.getInput('comment-url');
 
             for (const user of notifyUsers) {
               const slackId = slackMapping[user]?.channel;
