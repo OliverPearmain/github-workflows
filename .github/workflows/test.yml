@@ -23,10 +23,23 @@ jobs:
               ref: context.sha
             });
 
+            console.log("Fetched file content (base64):", file.data.content);
+
             // Decode base64 content and ensure valid JSON
             let slackMapping = Buffer.from(file.data.content, 'base64').toString().trim();
+            console.log("Decoded slackMapping string:", slackMapping);
+            
             if (!slackMapping) slackMapping = '{}';
-            return { slackMapping };
+            let parsedMapping;
+            try {
+              parsedMapping = JSON.parse(slackMapping);
+              console.log("Parsed slackMapping keys:", Object.keys(parsedMapping));
+            } catch (err) {
+              console.error("Failed to parse slackMapping JSON:", err);
+              parsedMapping = {};
+            }
+
+            return { slackMapping: JSON.stringify(parsedMapping) };
 
       - name: Determine thread contributors
         id: thread_check
