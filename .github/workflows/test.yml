@@ -1,0 +1,98 @@
+name: Notify Slack on Replies in Threads for Multiple Contributors
+
+on:
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  pr_reply_slack_notifications:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch Slack mapping JSON
+        id: fetch_mapping
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Fetch the file content via GitHub API
+            const file = await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: 'slack-notifications.json',
+              ref: context.sha
+            });
+
+            // Decode base64 content
+            const slackMapping = Buffer.from(file.data.content, 'base64').toString();
+            return { slackMapping };
+
+      - name: Determine thread contributors
+        id: thread_check
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const core = require('@actions/core');
+            const comment = context.payload.comment;
+            const currentAuthor = comment.user.login;
+            const slackMapping = JSON.parse('${{ steps.fetch_mapping.outputs.slackMapping }}');
+
+            // Skip if the comment is not a reply
+            if (!comment.in_reply_to_id) {
+              console.log("Comment is not a reply, skipping.");
+              core.setOutput("notifyUsers", "[]");
+              core.setOutput("commentUrl", comment.html_url);
+              return;
+            }
+
+            // Traverse the thread to collect all contributors
+            async function getThreadContributors(commentId) {
+              const contributors = new Set();
+              let currentId = commentId;
+              while (currentId) {
+                const c = await github.rest.pulls.getReviewComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: currentId
+                });
+                contributors.add(c.data.user.login);
+                currentId = c.data.in_reply_to_id || null;
+              }
+              return contributors;
+            }
+
+            const threadContributors = await getThreadContributors(comment.in_reply_to_id);
+            threadContributors.delete(currentAuthor);
+
+            // Filter contributors to only those in the slackMapping
+            const notifyUsers = [...threadContributors].filter(user => slackMapping[user]);
+            core.setOutput("notifyUsers", JSON.stringify(notifyUsers));
+            core.setOutput("commentUrl", comment.html_url);
+
+      - name: Send Slack notifications per user
+        if: steps.thread_check.outputs.notifyUsers != '[]'
+        uses: actions/github-script@v7
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_MOBILE_BOT_OAUTH_TOKEN }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { WebClient } = require('@slack/web-api');
+            const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+
+            const slackMapping = JSON.parse('${{ steps.fetch_mapping.outputs.slackMapping }}');
+            const commentUrl = '${{ steps.thread_check.outputs.commentUrl }}';
+            const notifyUsers = JSON.parse('${{ steps.thread_check.outputs.notifyUsers }}');
+
+            for (const user of notifyUsers) {
+              const slackId = slackMapping[user].channel;
+              if (!slackId) {
+                console.log(`No Slack channel defined for ${user}, skipping.`);
+                continue;
+              }
+
+              const text = `<@${slackId}> Someone replied in a PR review thread you contributed to: <${commentUrl}|View Comment>`;
+              await slack.chat.postMessage({ channel: slackId, text });
+              console.log(`✅ Sent message to ${user} (${slackId})`);
+            }
