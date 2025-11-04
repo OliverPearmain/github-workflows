@@ -31,7 +31,7 @@ jobs:
       - name: Determine thread contributors
         id: thread_check
         env:
-          SLACK_MAPPING: ${{ steps.fetch_mapping.outputs.slackMapping }}
+          SLACK_MAPPING: ${{ toJSON(fromJSON(steps.fetch_mapping.outputs.slackMapping)) }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -55,7 +55,7 @@ jobs:
             // Identify the root of the thread
             let rootId = comment.in_reply_to_id || comment.id;
 
-            // Filter all comments in this thread (comments that ultimately descend from the root)
+            // Filter all comments in this thread
             function isInThread(c, rootId) {
               let current = c;
               while (current.in_reply_to_id) {
@@ -63,7 +63,7 @@ jobs:
                 current = allComments.data.find(x => x.id === current.in_reply_to_id);
                 if (!current) break;
               }
-              return c.id === rootId; // include the root itself
+              return c.id === rootId;
             }
 
             const threadComments = allComments.data.filter(c => isInThread(c, rootId));
@@ -76,7 +76,7 @@ jobs:
             threadContributorsSet.delete(currentAuthor);
             console.log("threadContributors (after removing current author):", [...threadContributorsSet]);
 
-            // Filter to only those in the Slack mapping
+            // Filter to only those in Slack mapping
             const notifyUsers = [...threadContributorsSet].filter(u => slackMapping[u]);
             console.log("notifyUsers output:", notifyUsers);
             console.log("commentUrl output:", comment.html_url);
@@ -89,7 +89,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_MOBILE_BOT_OAUTH_TOKEN }}
-          SLACK_MAPPING: ${{ steps.fetch_mapping.outputs.slackMapping }}
+          SLACK_MAPPING: ${{ toJSON(fromJSON(steps.fetch_mapping.outputs.slackMapping)) }}
           NOTIFY_USERS: ${{ steps.thread_check.outputs.notifyUsers }}
           COMMENT_URL: ${{ steps.thread_check.outputs.commentUrl }}
         with:
