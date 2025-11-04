@@ -60,14 +60,25 @@ jobs:
                   repo: context.repo.repo,
                   comment_id: currentId
                 });
+
+                console.log(`Processing comment ID: ${c.data.id}, author: ${c.data.user.login}`);
                 contributors.add(c.data.user.login);
                 currentId = c.data.in_reply_to_id || null;
+
+                if (currentId) {
+                  console.log(`Next comment in thread (in_reply_to_id): ${currentId}`);
+                } else {
+                  console.log("Reached top of thread.");
+                }
               }
               return contributors;
             }
 
             const threadContributors = await getThreadContributors(comment.in_reply_to_id);
+            console.log("threadContributors (all contributors in thread):", [...threadContributors]);
+
             threadContributors.delete(currentAuthor);
+            console.log("threadContributors after removing current author:", [...threadContributors]);
 
             // Filter contributors to only those in the slackMapping
             const notifyUsers = [...threadContributors].filter(user => slackMapping[user]);
