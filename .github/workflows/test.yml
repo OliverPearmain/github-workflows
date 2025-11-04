@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Notify Slack for PR Review Replies
+      - name: DM Slack Users for PR Review Replies
         uses: actions/github-script@v7
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_MOBILE_BOT_OAUTH_TOKEN }}
@@ -73,32 +73,48 @@ jobs:
             const notifyUsers = [...threadContributorsSet].filter(u => slackMapping[u]);
             console.log("notifyUsers output:", notifyUsers);
 
-            // Send Slack messages using fetch
+            // Send DMs to each user
             for (const user of notifyUsers) {
-              const slackId = slackMapping[user]?.channel;
-              if (!slackId) {
-                console.log(`No Slack channel defined for ${user}, skipping.`);
+              const slackMemberId = slackMapping[user]?.slackMemberID;
+              if (!slackMemberId) {
+                console.log(`No Slack user ID defined for ${user}, skipping.`);
                 continue;
               }
 
-              const text = `<@${slackId}> Someone replied in a PR review thread you contributed to: <${comment.html_url}|View Comment>`;
+              const text = `Someone replied in a PR review thread you contributed to: <${comment.html_url}|View Comment>`;
 
-              const response = await fetch('https://slack.com/api/chat.postMessage', {
+              // Open DM channel
+              const imResponse = await fetch('https://slack.com/api/conversations.open', {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
                   'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`
                 },
-                body: JSON.stringify({
-                  channel: slackId,
-                  text: text
-                })
+                body: JSON.stringify({ users: slackMemberId })
+              });
+              const imData = await imResponse.json();
+
+              if (!imData.ok) {
+                console.error(`Failed to open DM with ${slackMemberId}:`, imData);
+                continue;
+              }
+
+              const dmChannelId = imData.channel.id;
+
+              // Send the message
+              const postResponse = await fetch('https://slack.com/api/chat.postMessage', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`
+                },
+                body: JSON.stringify({ channel: dmChannelId, text })
               });
 
-              const result = await response.json();
-              if (!result.ok) {
-                console.error(`Failed to send message to ${user}:`, result);
+              const postResult = await postResponse.json();
+              if (!postResult.ok) {
+                console.error(`Failed to send DM to ${user} (${slackMemberId}):`, postResult);
               } else {
-                console.log(`✅ Sent message to ${user} (${slackId})`);
+                console.log(`✅ Sent DM to ${user} (${slackMemberId})`);
               }
             }
